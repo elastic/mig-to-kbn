@@ -9,9 +9,8 @@ import io
 import json
 import sys
 import tempfile
-import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 import pytest
 import yaml
@@ -206,14 +205,14 @@ class GrafanaMetricMapPrefixDiscoveryTests(unittest.TestCase):
 
     @staticmethod
     def _caps_response(fields):
-        response = mock.Mock(status_code=200)
+        response = unittest.mock.Mock(status_code=200)
         response.json.return_value = {"fields": fields}
         return response
 
     def test_discovery_raises_when_auto_resolves_to_named_prometheus_layout(self):
         resolver = self._resolver_with_namespaced_map("auto")
         response = self._caps_response(self._NAMED_CAPS)
-        with mock.patch.object(grafana_schema.requests, "get", return_value=response):
+        with unittest.mock.patch.object(grafana_schema.requests, "get", return_value=response):
             with self.assertRaises(ValueError) as caught:
                 resolver._discover_fields()
         self.assertIn("Use the logical name 'already_prefixed' instead.", str(caught.exception))
@@ -223,14 +222,14 @@ class GrafanaMetricMapPrefixDiscoveryTests(unittest.TestCase):
         response = self._caps_response(
             {"service.name": {"keyword": {"aggregatable": True, "searchable": True}}}
         )
-        with mock.patch.object(grafana_schema.requests, "get", return_value=response):
+        with unittest.mock.patch.object(grafana_schema.requests, "get", return_value=response):
             resolver._discover_fields()
         self.assertEqual(resolver._auto_resolved_profile, "otel")
         self.assertEqual(resolver.discovery_status()["status"], "ok")
 
     def test_discovery_stays_graceful_for_unrelated_request_failure(self):
         resolver = self._resolver_with_namespaced_map("auto")
-        with mock.patch.object(
+        with unittest.mock.patch.object(
             grafana_schema.requests,
             "get",
             side_effect=RuntimeError("connection reset"),
@@ -242,9 +241,9 @@ class GrafanaMetricMapPrefixDiscoveryTests(unittest.TestCase):
 
     def test_discovery_stays_graceful_for_unrelated_json_failure(self):
         resolver = self._resolver_with_namespaced_map("auto")
-        response = mock.Mock(status_code=200)
+        response = unittest.mock.Mock(status_code=200)
         response.json.side_effect = ValueError("Expecting value: line 1 column 1")
-        with mock.patch.object(grafana_schema.requests, "get", return_value=response):
+        with unittest.mock.patch.object(grafana_schema.requests, "get", return_value=response):
             resolver._discover_fields()
         status = resolver.discovery_status()
         self.assertEqual(status["status"], "error")
@@ -328,7 +327,7 @@ class GrafanaMetricMapPrefixCliTests(unittest.TestCase):
     def test_migrate_exits_nonzero_when_auto_discovers_named_prometheus_layout(self):
         from observability_migration.adapters.source.grafana import cli as grafana_cli
 
-        response = mock.Mock(status_code=200)
+        response = unittest.mock.Mock(status_code=200)
         response.json.return_value = {
             "fields": {
                 "metrics.up": {"double": {"aggregatable": True, "searchable": True}},
@@ -366,7 +365,7 @@ class GrafanaMetricMapPrefixCliTests(unittest.TestCase):
             old_stderr = sys.stderr
             try:
                 sys.stderr = stderr
-                with mock.patch.object(
+                with unittest.mock.patch.object(
                     grafana_schema.requests, "get", return_value=response
                 ):
                     with self.assertRaises(SystemExit) as caught:
