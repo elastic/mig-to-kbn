@@ -11,6 +11,9 @@ from typing import Any
 
 import requests
 
+from observability_migration.adapters.source.grafana.metric_map_lint import (
+    GrafanaMetricMapPrefixError,
+)
 from observability_migration.core.verification.field_capabilities import (
     field_capability_from_es_field_caps,
     has_conflicting_types,
@@ -294,6 +297,11 @@ class SchemaResolver:
             else:
                 self._discovery_status = "error"
                 self._discovery_error = f"_field_caps returned HTTP {resp.status_code}: {getattr(resp, 'text', '')}"
+        except GrafanaMetricMapPrefixError:
+            # Fail closed: ``auto`` resolving to a named Prometheus layout can
+            # only be linted once caps are in, and the CLI exits 1 on it. A
+            # discovery warning here would emit doubly-prefixed ES|QL instead.
+            raise
         except Exception as exc:
             self._discovery_status = "error"
             self._discovery_error = f"_field_caps request failed: {exc}"

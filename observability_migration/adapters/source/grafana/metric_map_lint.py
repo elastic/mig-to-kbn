@@ -23,6 +23,15 @@ _PREFIX_BY_PROFILE = {
 _REMOTE_WRITE_LEAVES = (".counter", ".rate", ".value")
 
 
+class GrafanaMetricMapPrefixError(ValueError):
+    """A metric_map target already carries the active profile's prefix.
+
+    Distinct from a plain ``ValueError`` so schema discovery can let this
+    fail-closed signal escape while still degrading gracefully on unrelated
+    request/response errors.
+    """
+
+
 def grafana_metric_map_prefix_errors(
     metric_map: Mapping[str, Any] | None,
     namespacing_profile: str | None,
@@ -47,7 +56,7 @@ def raise_if_grafana_metric_map_prefix_errors(
 ) -> None:
     errors = grafana_metric_map_prefix_errors(metric_map, namespacing_profile)
     if errors:
-        raise ValueError("\n".join(errors))
+        raise GrafanaMetricMapPrefixError("\n".join(errors))
 
 
 def _entry_targets(source: str, raw: Any) -> list[tuple[str, str]]:

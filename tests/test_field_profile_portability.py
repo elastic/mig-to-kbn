@@ -844,4 +844,3 @@ def test_cli_migrate_curated_1471_and_engine_only_no_leakage(profile, tmp_path):
     else:
         assert "k8s.pod.name" in curated_blob
         assert "labels.pod" not in curated_blob
-

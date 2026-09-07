@@ -195,11 +195,15 @@ def test_passthrough_keeps_prometheus_metric_and_label_names(tmp_path):
 
 
 def test_cli_migrate_grafana_profiles_write_distinct_native(tmp_path):
-    """Each profile must change the query, not only the CLI flag."""
+    """Each profile must change the query, not only the CLI flag.
+
+    Every run shares one index so the only thing that can differ between
+    signatures is the field-profile emit.
+    """
     signatures: dict[str, str] = {}
     for profile in ("otel", "prometheus_native", "passthrough"):
         out = tmp_path / profile
-        _migrate(out, profile, index=f"metrics-gf{profile[:3]}-default")
+        _migrate(out, profile, index=_INDEX)
         signatures[profile] = _joined_queries(out)
     assert signatures["otel"] != signatures["prometheus_native"]
     assert signatures["otel"] != signatures["passthrough"]

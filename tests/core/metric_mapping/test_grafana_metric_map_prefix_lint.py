@@ -11,10 +11,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import yaml
 
+from observability_migration.adapters.source.grafana import schema as grafana_schema
 from observability_migration.adapters.source.grafana.metric_map_lint import (
     grafana_metric_map_prefix_errors,
 )
@@ -185,6 +187,70 @@ class GrafanaMetricMapPrefixResolverTests(unittest.TestCase):
         self.assertEqual(resolver._auto_resolved_profile, "otel")
 
 
+class GrafanaMetricMapPrefixDiscoveryTests(unittest.TestCase):
+    """Discovery must not swallow the prefix lint (the CLI exits on it)."""
+
+    _NAMED_CAPS = {
+        "metrics.foo": {"double": {"aggregatable": True, "searchable": True}},
+        "labels.instance": {"keyword": {"aggregatable": True, "searchable": True}},
+    }
+
+    def _resolver_with_namespaced_map(self, field_profile):
+        pack = RulePackConfig()
+        pack.metric_map.update(normalize_metric_map({"src": "metrics.already_prefixed"}))
+        return SchemaResolver(
+            pack,
+            es_url="https://es.example",
+            field_profile=field_profile,
+        )
+
+    @staticmethod
+    def _caps_response(fields):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"fields": fields}
+        return response
+
+    def test_discovery_raises_when_auto_resolves_to_named_prometheus_layout(self):
+        resolver = self._resolver_with_namespaced_map("auto")
+        response = self._caps_response(self._NAMED_CAPS)
+        with mock.patch.object(grafana_schema.requests, "get", return_value=response):
+            with self.assertRaises(ValueError) as caught:
+                resolver._discover_fields()
+        self.assertIn("Use the logical name 'already_prefixed' instead.", str(caught.exception))
+
+    def test_discovery_stays_graceful_when_auto_falls_back_to_otel(self):
+        resolver = self._resolver_with_namespaced_map("auto")
+        response = self._caps_response(
+            {"service.name": {"keyword": {"aggregatable": True, "searchable": True}}}
+        )
+        with mock.patch.object(grafana_schema.requests, "get", return_value=response):
+            resolver._discover_fields()
+        self.assertEqual(resolver._auto_resolved_profile, "otel")
+        self.assertEqual(resolver.discovery_status()["status"], "ok")
+
+    def test_discovery_stays_graceful_for_unrelated_request_failure(self):
+        resolver = self._resolver_with_namespaced_map("auto")
+        with mock.patch.object(
+            grafana_schema.requests,
+            "get",
+            side_effect=RuntimeError("connection reset"),
+        ):
+            resolver._discover_fields()
+        status = resolver.discovery_status()
+        self.assertEqual(status["status"], "error")
+        self.assertIn("connection reset", status["error"])
+
+    def test_discovery_stays_graceful_for_unrelated_json_failure(self):
+        resolver = self._resolver_with_namespaced_map("auto")
+        response = mock.Mock(status_code=200)
+        response.json.side_effect = ValueError("Expecting value: line 1 column 1")
+        with mock.patch.object(grafana_schema.requests, "get", return_value=response):
+            resolver._discover_fields()
+        status = resolver.discovery_status()
+        self.assertEqual(status["status"], "error")
+        self.assertIn("Expecting value", status["error"])
+
+
 def test_shipped_pack_metric_maps_are_bare_under_named_prometheus_profiles():
     pack_yamls = sorted(_PACK_ROOT.glob("grafana_*/pack.yaml"))
     assert pack_yamls, "expected shipped Grafana curated packs"
@@ -256,6 +322,77 @@ class GrafanaMetricMapPrefixCliTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 1)
             err = stderr.getvalue()
             self.assertIn("ERROR:", err)
+            self.assertIn("Use the logical name 'already_prefixed'", err)
+            self.assertFalse((out_dir / "dashboards" / "native").exists())
+
+    def test_migrate_exits_nonzero_when_auto_discovers_named_prometheus_layout(self):
+        from observability_migration.adapters.source.grafana import cli as grafana_cli
+
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {
+            "fields": {
+                "metrics.up": {"double": {"aggregatable": True, "searchable": True}},
+                "labels.instance": {
+                    "keyword": {"aggregatable": True, "searchable": True},
+                },
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            map_file = tmp_path / "map.yaml"
+            map_file.write_text(
+                yaml.safe_dump({"metric_map": {"src": "metrics.already_prefixed"}}),
+                encoding="utf-8",
+            )
+            input_dir = tmp_path / "in"
+            input_dir.mkdir()
+            (input_dir / "dash.json").write_text(
+                json.dumps(
+                    {
+                        "title": "Auto prefix lint probe",
+                        "panels": [
+                            {
+                                "title": "A",
+                                "type": "stat",
+                                "targets": [{"expr": "up"}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out_dir = tmp_path / "out"
+            stderr = io.StringIO()
+            old_stderr = sys.stderr
+            try:
+                sys.stderr = stderr
+                with mock.patch.object(
+                    grafana_schema.requests, "get", return_value=response
+                ):
+                    with self.assertRaises(SystemExit) as caught:
+                        grafana_cli.main(
+                            [
+                                "--source",
+                                "files",
+                                "--input-dir",
+                                str(input_dir),
+                                "--output-dir",
+                                str(out_dir),
+                                "--assets",
+                                "dashboards",
+                                "--field-profile",
+                                "auto",
+                                "--es-url",
+                                "https://es.example",
+                                "--metric-map-file",
+                                str(map_file),
+                                "--no-curated-packs",
+                            ]
+                        )
+            finally:
+                sys.stderr = old_stderr
+            self.assertEqual(caught.exception.code, 1)
+            err = stderr.getvalue()
             self.assertIn("Use the logical name 'already_prefixed'", err)
             self.assertFalse((out_dir / "dashboards" / "native").exists())
 

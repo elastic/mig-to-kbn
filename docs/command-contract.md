@@ -597,13 +597,15 @@ stream when you also want the Kibana data-view object / controls scoped there.
 Without `--es-url`, schema discovery is skipped entirely, so `--esql-index`
 still sets the query `FROM`/`PROMQL index` target, but the emitted field
 spellings are unverified against your data. What the run emits depends on the
-`--field-profile`: `otel` (and `auto`) fall back to OTel field defaults (e.g.
+`--field-profile`: `otel` falls back to OTel field defaults (e.g.
 `service.name`); a named Prometheus profile (`prometheus_native`,
 `prometheus_metrics`, `prometheus_remote_write`) emits that layout's fixed
 namespaced spellings (e.g. `labels.*` / `metrics.*`); `passthrough` emits raw
-source names. In every case the offline run cannot confirm the index matches
-your data, so it prints a profile-specific "panels may render empty" warning
-naming the fields it emitted and the `--es-url` remediation.
+source names. `auto` is not one of the offline choices — it resolves the layout
+from live field caps, so the Grafana CLI rejects `--field-profile auto` without
+`--es-url` (exit 2). In every case the offline run cannot confirm the index
+matches your data, so it prints a profile-specific "panels may render empty"
+warning naming the fields it emitted and the `--es-url` remediation.
 
 **Exception — Grafana panels already written as raw ES|QL.** If a source
 Grafana panel's `datasource.type` is `elasticsearch` and its query text is
