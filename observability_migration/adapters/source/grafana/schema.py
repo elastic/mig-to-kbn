@@ -11,6 +11,9 @@ from typing import Any
 
 import requests
 
+from observability_migration.adapters.source.grafana.metric_map_lint import (
+    GrafanaMetricMapPrefixError,
+)
 from observability_migration.core.verification.field_capabilities import (
     field_capability_from_es_field_caps,
     has_conflicting_types,
@@ -160,6 +163,17 @@ class SchemaResolver:
         self._metric_map_gaps: list[str] = []
         self._metric_map_warnings: list[str] = []
         self._metric_map_applied: dict[str, str] = {}
+        self._assert_metric_map_targets_are_logical()
+
+    def _assert_metric_map_targets_are_logical(self) -> None:
+        """Fail closed when metric_map targets already carry this profile's prefix."""
+        from .metric_map_lint import raise_if_grafana_metric_map_prefix_errors
+
+        pack = self._rule_pack
+        raise_if_grafana_metric_map_prefix_errors(
+            getattr(pack, "metric_map", None) or {},
+            self._effective_schema_profile(),
+        )
 
     def _profile_metric_candidates(self, metric_name, profile):
         if not metric_name:
@@ -198,6 +212,7 @@ class SchemaResolver:
         clone.__dict__.update(self.__dict__)
         clone._rule_pack = rule_pack
         clone._cooccurrence_cache = {}
+        clone._assert_metric_map_targets_are_logical()
         return clone
 
     def metric_map_gaps(self) -> list[str]:
@@ -282,6 +297,11 @@ class SchemaResolver:
             else:
                 self._discovery_status = "error"
                 self._discovery_error = f"_field_caps returned HTTP {resp.status_code}: {getattr(resp, 'text', '')}"
+        except GrafanaMetricMapPrefixError:
+            # Fail closed: ``auto`` resolving to a named Prometheus layout can
+            # only be linted once caps are in, and the CLI exits 1 on it. A
+            # discovery warning here would emit doubly-prefixed ES|QL instead.
+            raise
         except Exception as exc:
             self._discovery_status = "error"
             self._discovery_error = f"_field_caps request failed: {exc}"
@@ -376,6 +396,7 @@ class SchemaResolver:
                     "field profile auto could not detect a named Prometheus layout; "
                     "falling back to otel"
                 )
+        self._assert_metric_map_targets_are_logical()
         return self._auto_resolved_profile
 
     def _maybe_warn_otel_plan_vs_named_layout(self, detected):
